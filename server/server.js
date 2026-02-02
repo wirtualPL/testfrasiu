@@ -1,114 +1,109 @@
 import express from 'express';
-import sqlite3 from 'sqlite3';
 import cors from 'cors';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+import { sql } from '@vercel/postgres';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
-const db = new sqlite3.Database(`${__dirname}/quiz.db`);
 
 app.use(cors());
 app.use(express.json());
 
-// Initialize database
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS scores (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nickname TEXT NOT NULL,
-      score INTEGER NOT NULL,
-      total INTEGER NOT NULL,
-      percentage INTEGER NOT NULL,
-      date TEXT NOT NULL,
-      settings TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+// --- WAŻNE: Endpoint do jednorazowego utworzenia tabeli ---
+// Po wdrożeniu wejdź raz na adres: twoja-strona.vercel.app/api/create-table
+app.get('/api/create-table', async (req, res) => {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS scores (
+        id SERIAL PRIMARY KEY,
+        nickname TEXT NOT NULL,
+        score INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        percentage INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        settings TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    return res.status(200).json({ message: 'Tabela scores została utworzona' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
 });
 
 // GET all scores (sorted by percentage, then by date)
-app.get('/api/scores', (req, res) => {
-  db.all(
-    `SELECT * FROM scores ORDER BY percentage DESC, created_at DESC LIMIT 100`,
-    (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      res.json(rows || []);
-    }
-  );
+app.get('/api/scores', async (req, res) => {
+  try {
+    // Vercel Postgres używa składni szablonów (template literals)
+    const { rows } = await sql`
+      SELECT * FROM scores 
+      ORDER BY percentage DESC, created_at DESC 
+      LIMIT 100
+    `;
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// GET scores with history (all attempts by all players)
-app.get('/api/scores/history', (req, res) => {
-  db.all(
-    `SELECT nickname, score, total, percentage, date, settings, created_at 
-     FROM scores 
-     ORDER BY created_at DESC 
-     LIMIT 500`,
-    (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      res.json(rows || []);
-    }
-  );
+// GET scores with history
+app.get('/api/scores/history', async (req, res) => {
+  try {
+    const { rows } = await sql`
+      SELECT nickname, score, total, percentage, date, settings, created_at 
+      FROM scores 
+      ORDER BY created_at DESC 
+      LIMIT 500
+    `;
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // GET scores for a specific player
-app.get('/api/scores/player/:nickname', (req, res) => {
-  db.all(
-    `SELECT * FROM scores WHERE nickname = ? ORDER BY created_at DESC`,
-    [req.params.nickname],
-    (err, rows) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      res.json(rows || []);
-    }
-  );
+app.get('/api/scores/player/:nickname', async (req, res) => {
+  const { nickname } = req.params;
+  try {
+    const { rows } = await sql`
+      SELECT * FROM scores 
+      WHERE nickname = ${nickname} 
+      ORDER BY created_at DESC
+    `;
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST new score
-app.post('/api/scores', (req, res) => {
+app.post('/api/scores', async (req, res) => {
   const { nickname, score, total, percentage, settings } = req.body;
 
   if (!nickname || score === undefined || !total || percentage === undefined || !settings) {
-    res.status(400).json({ error: 'Missing required fields' });
-    return;
+    return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  db.run(
-    `INSERT INTO scores (nickname, score, total, percentage, date, settings) 
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [nickname, score, total, percentage, new Date().toISOString(), settings],
-    (err) => {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-      res.json({ success: true });
-    }
-  );
-});
-
-// DELETE all scores (admin only - in production add auth)
-app.delete('/api/scores', (req, res) => {
-  db.run(`DELETE FROM scores`, (err) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+  try {
+    const date = new Date().toISOString();
+    await sql`
+      INSERT INTO scores (nickname, score, total, percentage, date, settings) 
+      VALUES (${nickname}, ${score}, ${total}, ${percentage}, ${date}, ${settings})
+    `;
     res.json({ success: true });
-  });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`API available at http://localhost:${PORT}/api/scores`);
+// DELETE all scores
+app.delete('/api/scores', async (req, res) => {
+  try {
+    await sql`DELETE FROM scores`;
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
+
+// Na Vercel NIE używamy app.listen().
+// Eksportujemy aplikację, aby Vercel mógł ją obsłużyć jako Serverless Function.
+export default app;
