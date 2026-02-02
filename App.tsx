@@ -15,24 +15,41 @@ const App: React.FC = () => {
     setState('playing');
   };
 
-  const finishQuiz = (score: number, total: number) => {
+  const finishQuiz = async (score: number, total: number) => {
     setLastResult({ score, total });
     
     if (settings) {
       const percentage = Math.round((score / total) * 100);
-      const newRecord: ScoreRecord = {
-        nickname: settings.nickname,
-        score,
-        total,
-        percentage,
-        date: new Date().toISOString(),
-        settings: `Q: ${settings.questionCount === 'all' ? '∞' : settings.questionCount}, T: ${settings.timeLimit === 'unlimited' ? '∞' : settings.timeLimit + 's'}`
-      };
-
-      const existing = localStorage.getItem('quiz_ranking');
-      const ranking: ScoreRecord[] = existing ? JSON.parse(existing) : [];
-      ranking.push(newRecord);
-      localStorage.setItem('quiz_ranking', JSON.stringify(ranking));
+      const settingsStr = `Q: ${settings.questionCount === 'all' ? '∞' : settings.questionCount}, T: ${settings.timeLimit === 'unlimited' ? '∞' : settings.timeLimit + 's'}`;
+      
+      try {
+        // Save to server database
+        await fetch('http://localhost:3001/api/scores', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nickname: settings.nickname,
+            score,
+            total,
+            percentage,
+            settings: settingsStr
+          })
+        });
+      } catch (error) {
+        console.error('Failed to save score to server:', error);
+        // Fallback to localStorage if server is unavailable
+        const existing = localStorage.getItem('quiz_ranking');
+        const ranking: ScoreRecord[] = existing ? JSON.parse(existing) : [];
+        ranking.push({
+          nickname: settings.nickname,
+          score,
+          total,
+          percentage,
+          date: new Date().toISOString(),
+          settings: settingsStr
+        });
+        localStorage.setItem('quiz_ranking', JSON.stringify(ranking));
+      }
     }
 
     setState('results');
